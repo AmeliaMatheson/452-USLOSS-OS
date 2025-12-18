@@ -1,0 +1,645 @@
+#include "phase1.h"
+#include "phase2.h"
+#include <usloss.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+
+/**************
+* file: phase1.c
+* Authors: Amelia Matheson, Hudson Cox
+* Description: This file is part A of phase 1 of our project. It contains the necessary structures to form and maintain
+*              A PCB table and monitor relationships throughout the table as processes are added, moved, or removed. It
+*              will both initialize the table and create the initial process that will be responsible for starting up
+*              processes that follow.
+***************/
+
+typedef struct Mailbox {
+    int id;
+    int totalSlots;
+    int slotSize;
+    int usedSlots;
+    int isActive;
+    struct MailSlot *slots;
+    struct ShadowProcess *blockedSenders;
+    struct ShadowProcess *blockedReceivers;
+} Mailbox;
+
+typedef struct MailSlot {
+    int slotID;
+    int size;
+    char msg_ptr[MAX_MESSAGE];
+    int inUse;
+    struct MailSlot *nextSlot;
+} MailSlot;
+
+typedef struct ShadowProcess {
+    int pid;
+    struct ShadowProcess *nextProc;
+    struct MailSlot *message;
+    void *msg_ptr;
+    int msg_size;
+} ShadowProcess;
+
+// Function Prototypes
+int disableInterrupts();
+void enableInterrupts(int oldPSR);
+int send(int mbox_id, void *msg_ptr, int msg_size, int isCond);
+int recv(int mbox_id, void *msg_ptr, int msg_max_size, int isCond);
+static void nullSys(USLOSS_Sysargs *args);
+void clockIntHandler(int dev, void *payload);
+void diskIntHandler(int dev, void *unit);
+void termIntHandler(int dev, void *unit);
+static void syscallHandler(int dev, void *args);
+
+// Global Variables
+int totalBoxes;
+int totalSlotsGlobal;
+int MboxIndex;
+int slotIndex;
+int lastClockMsg;
+int clockIntBox;
+int diskIntBox[2];
+int termIntBox[4];
+
+// Global Arrays
+static struct Mailbox mailboxes[MAXMBOX];
+static struct MailSlot mailSlots[MAXSLOTS];
+static struct ShadowProcess shadowProcTable[MAXPROC];
+
+// Global arrays for system calls and interrupts
+void (*systemCallVec[MAXSYSCALLS])(USLOSS_Sysargs *args);
+extern void (*USLOSS_IntVec[USLOSS_NUM_INTS])(int dev, void *arg);
+
+
+
+/**************
+* Function: phase2_init
+* Parameters: void
+* Returns: void
+* Description: Initializes any data structure used throughout the file.
+***************/
+void phase2_init(void) {
+    // Initialize global variables
+    MboxIndex = 0;
+    slotIndex = 0;
+    totalBoxes = 0;
+    totalSlotsGlobal = 0;
+
+    // Initialize all tables
+    memset(mailboxes, 0, sizeof(mailboxes));
+    memset(mailSlots, 0, sizeof(mailSlots));
+    memset(shadowProcTable, 0, sizeof(shadowProcTable));
+
+    // Create 7 mailboxes for interrupts
+    clockIntBox = MboxCreate(0, sizeof(int));  // mailbox id for clock interrupt
+    if (clockIntBox < 0) {
+        // Error
+        USLOSS_Console("Error creating mailbox for clock interrupt: %d\n", clockIntBox);
+        return;
+    }
+
+    // Create 2 mailboxes for disk interrupts, save ids in array
+    for (int i = 0; i < 2; i++) {
+        diskIntBox[i] = MboxCreate(0, sizeof(int));
+        if (diskIntBox[i] < 0) {
+            // Error
+            USLOSS_Console("Error creating mailbox for disk interrupt %d: %d\n", i, diskIntBox[i]);
+            return;
+        }
+    }
+
+    // Create 4 mailboxes for terminal interrupts, save ids in array
+    for (int i = 0; i < 4; i++) {
+        termIntBox[i] = MboxCreate(0, sizeof(int));
+        if (termIntBox[i] < 0) {
+            // Error
+            USLOSS_Console("Error creating mailbox for terminal interrupt %d: %d\n", i, termIntBox[i]);
+            return;
+        }
+    }
+    lastClockMsg = currentTime();
+
+    // Initialize the system call vector
+    for (int i = 0; i < MAXSYSCALLS; i++) {
+        systemCallVec[i] = nullSys;    }
+
+    USLOSS_IntVec[0] = clockIntHandler;
+    USLOSS_IntVec[2] = diskIntHandler;
+    USLOSS_IntVec[3] = termIntHandler;
+    USLOSS_IntVec[5] = syscallHandler;
+    
+}
+
+/**************
+* Function: phase2_start_service_processes
+* Parameters: void
+* Returns: void
+* Description: Calls spork to create processes for phase2 if any are needed at the point when it was called.
+***************/
+void phase2_start_service_processes(void) {}
+
+static void nullSys(USLOSS_Sysargs *args) {
+    USLOSS_Console("nullsys(): Program called an unimplemented syscall.  syscall no: %d   PSR: %#04x\n", args->number, USLOSS_PsrGet());
+    USLOSS_Halt(1);
+}
+
+/**************
+* Function: MboxCreate
+* Parameters: int slots, int slot_size
+* Returns: int
+* Description: Creates a new mailbox and places it into an array of mailboxes. It will return the index of the array
+*              where the new mailbox was placed. If it returns -1 then there is an invalid parameter or there is no
+*              space in the array for the mailbox to be created.
+***************/
+int MboxCreate(int totalSlots, int slotSize) {
+    // Error checks
+    if (totalSlots < 0 || slotSize < 0 || totalSlots > MAXSLOTS || slotSize > MAX_MESSAGE) {
+        return -1;
+    }
+
+    // Find an available mailbox
+    for (int i = 0; i < MAXMBOX; i++) {
+        int index = (MboxIndex + i) % MAXMBOX;
+        if (mailboxes[index].isActive == 0) {
+            mailboxes[index].id = index;
+            mailboxes[index].totalSlots = totalSlots;
+            mailboxes[index].slotSize = slotSize;
+            mailboxes[index].usedSlots = 0;
+            mailboxes[index].isActive = 1;
+            
+            MboxIndex = (index + 1) % MAXMBOX;
+            return index;
+        }
+    }
+
+    // No available mailbox
+    return -1;
+}
+
+/**************
+* Function: MboxRelease
+* Parameters: int mbox_id
+* Returns: int
+* Description: Destroys the mailbox at the location indicated by the parameter and all slots consumed by the mailbox are
+*              freed. All blocked producers and consumers are unblocked and return -1. The mailbox being destroyed must
+*              wake up its blocked processes (not necessarily instantly). This function returns 0 if it was successful
+*              or -1 if the id is not a mailbox that is currently in use.
+***************/
+int MboxRelease(int mbox_id) {
+    // Error check
+    if (mbox_id < 0 || mbox_id >= MAXMBOX || mailboxes[mbox_id].isActive == 0) {
+        return -1;
+    }
+
+    mailboxes[mbox_id].isActive = 0;
+    mailboxes[mbox_id].usedSlots = 0;
+
+    // Unblock any blocked senders
+    ShadowProcess *blockedSender = mailboxes[mbox_id].blockedSenders;
+    while (blockedSender != NULL) {
+        ShadowProcess *nextSender = blockedSender->nextProc;
+        unblockProc(blockedSender->pid);
+        blockedSender = nextSender;
+    }
+    mailboxes[mbox_id].blockedSenders = NULL;
+
+
+    // Unblock any blocked receivers
+    ShadowProcess *blockedReceiver = mailboxes[mbox_id].blockedReceivers;
+    while (blockedReceiver != NULL) {
+        ShadowProcess *receiver = blockedReceiver->nextProc;
+        unblockProc(blockedReceiver->pid);
+        blockedReceiver = receiver;
+    }
+    mailboxes[mbox_id].blockedReceivers = NULL;
+
+    // Reset the slots queue
+    MailSlot *currentSlot = mailboxes[mbox_id].slots;
+    while (currentSlot != NULL) {
+        MailSlot *temp = currentSlot->nextSlot;
+        currentSlot->slotID = 0;
+        currentSlot->size = 0;
+        currentSlot->inUse = 0;
+        memset(currentSlot->msg_ptr, 0, sizeof(currentSlot->msg_ptr));
+        currentSlot->nextSlot = NULL;
+        currentSlot = temp;
+        totalSlotsGlobal--;
+    }
+
+    return 0;
+}
+
+/**************
+* Function: send
+* Parameters: int mbox_id, void msg_ptr, int msg_size, int cond_flag
+* Returns: int
+* Description: Helper function for MboxSend and MboxCondSend that is used to send the msg_ptr to a mailbox. It will
+*              check the flag that is passed as a parameter and determine if it is a conditional send or not so that
+*              it knows whether or not to block if there is no space or consumers available.
+***************/
+int send(int mbox_id, void *msg_ptr, int msg_size, int isCond) {
+    // Error check
+    if (mbox_id < 0 || mbox_id >= MAXMBOX || mailboxes[mbox_id].isActive == 0 || msg_size < 0 || msg_size > mailboxes[mbox_id].slotSize || (msg_size > 0 && msg_ptr == NULL)) {
+        return -1;
+    }
+
+    Mailbox *mailbox = &mailboxes[mbox_id];
+
+    // If there are blocked receivers, directly deliver the message
+    if (mailbox->blockedReceivers != NULL) {
+        ShadowProcess *receiver = mailbox->blockedReceivers;
+        mailbox->blockedReceivers = receiver->nextProc;
+
+       if (msg_size > receiver->msg_size) {
+            // don't copy message if it's too big
+        }
+        else {
+            memcpy(receiver->msg_ptr, msg_ptr, msg_size);
+            
+        }
+        receiver->msg_size = msg_size;
+        unblockProc(receiver->pid);
+        return 0;
+    }
+
+    // If no available slots, handle blocking
+    if (mailbox->usedSlots >= mailbox->totalSlots  || mailbox->usedSlots > MAXSLOTS) {
+        if (isCond == 1) {
+            return -2;
+        }
+        // Block the sender and add to blockedSenders queue
+        int pid = getpid();
+        ShadowProcess *sender = &shadowProcTable[pid % MAXPROC];
+        sender->pid = pid;
+        sender->msg_ptr = msg_ptr;
+        sender->msg_size = msg_size;
+        sender->nextProc = NULL;
+
+        if (mailbox->blockedSenders == NULL) {
+            mailbox->blockedSenders = sender;
+        } else {
+            ShadowProcess *tmp = mailbox->blockedSenders;
+            while (tmp->nextProc != NULL) {
+                tmp = tmp->nextProc;
+            }
+            tmp->nextProc = sender;
+        }
+
+        blockMe();
+        if (mailboxes[mbox_id].isActive == 0) {
+            return -1;
+        }
+    }
+
+    // Find an available mail slot
+    MailSlot *newSlot = NULL;
+    for (int i = 0; i < MAXSLOTS; i++) {
+        int index = (slotIndex + i) % MAXSLOTS;
+        if (!mailSlots[index].inUse) {
+            newSlot = &mailSlots[index];
+            slotIndex = (index + 1) % MAXSLOTS;
+            break;
+        }
+    }
+
+    if (newSlot == NULL) {
+        return -2;
+    }
+
+    newSlot->size = msg_size;
+    memcpy(newSlot->msg_ptr, msg_ptr, msg_size);
+    newSlot->inUse = 1;
+    newSlot->nextSlot = NULL;
+
+    // Add the slot to the **end** of the mailbox's slots queue for FIFO
+    if (mailbox->slots == NULL) {
+        mailbox->slots = newSlot;
+    } else {
+        MailSlot *tmp = mailbox->slots;
+        while (tmp->nextSlot != NULL) {
+            tmp = tmp->nextSlot;
+        }
+        tmp->nextSlot = newSlot;
+    }
+    mailbox->usedSlots++;
+
+    return 0;
+}
+
+/**************
+* Function: recv
+* Parameters: int mbox_id, void msg_ptr, int msg_size, int cond_flag
+* Returns: int
+* Description: Helper function for MboxRecv and MboxCondRecv that is used to recieve the msg_ptr if there is one queued.
+*              It checks the flag that is passed as a parameter and determine if it is a conditional send or not so that
+*              it knows whether or not to block if there is no msg_ptr available.
+***************/
+int recv(int mbox_id, void *msg_ptr, int msg_max_size, int isCond) {
+    if (mbox_id < 0 || mbox_id >= MAXMBOX || !mailboxes[mbox_id].isActive || msg_max_size < 0 || (msg_max_size > 0 && msg_ptr == NULL)) {
+        return -1;
+    }
+
+    Mailbox *mailbox = &mailboxes[mbox_id];
+
+    // Check if there are messages in the mailbox slots first
+    if (mailbox->usedSlots > 0) {
+        MailSlot *slot = mailbox->slots;
+        if (slot != NULL && slot->inUse) {
+            int sizeToCopy = slot->size;
+            //printf("IN RECV; size to copy: %d\n", sizeToCopy);
+            if (sizeToCopy > msg_max_size) {
+                return -1;
+            }
+
+            // Copy the message to the receiver's buffer
+            memcpy(msg_ptr, slot->msg_ptr, sizeToCopy);
+            slot->inUse = 0;
+
+            // Remove the slot from the slots queue
+            mailbox->slots = slot->nextSlot;
+
+            mailbox->usedSlots--;
+
+            // Check for blocked senders and unblock if possible
+            if (mailbox->blockedSenders != NULL && mailbox->usedSlots < mailbox->totalSlots) {
+                ShadowProcess *sender = mailbox->blockedSenders;
+                mailbox->blockedSenders = sender->nextProc;
+                unblockProc(sender->pid);
+            }
+
+            return sizeToCopy;
+        }
+    }
+
+    // If no messages in slots, check for blocked senders
+    if (mailbox->blockedSenders != NULL) {
+        ShadowProcess *sender = mailbox->blockedSenders;
+        mailbox->blockedSenders = sender->nextProc;
+        unblockProc(sender->pid);
+
+        // Prepare the sender's message for copying
+        if (sender->msg_size > msg_max_size) {
+            return -1;
+        }
+
+        memcpy(msg_ptr, sender->msg_ptr, sender->msg_size);
+        return sender->msg_size;
+    }
+
+    // If no senders and no messages, handle conditional receive
+    if (mailbox->usedSlots == 0) {
+        if (isCond == 1) {
+            return -2;
+        }
+
+        // Block the receiver and add to the blockedReceivers queue
+        int pid = getpid();
+        ShadowProcess *receiver = &shadowProcTable[pid % MAXPROC];
+        receiver->pid = pid;
+        receiver->msg_ptr = msg_ptr;
+        receiver->msg_size = msg_max_size;
+        receiver->nextProc = NULL;
+
+        // Add receiver to blockedReceivers queue
+        if (mailbox->blockedReceivers == NULL) {
+            mailbox->blockedReceivers = receiver;
+        } else {
+            ShadowProcess *tmp = mailbox->blockedReceivers;
+            while (tmp->nextProc != NULL) {
+                tmp = tmp->nextProc;
+            }
+            tmp->nextProc = receiver;
+        }
+        blockMe();
+        if (mailboxes[mbox_id].isActive == 0) {
+            return -1;
+        }
+        if (receiver->msg_size > msg_max_size) {
+            return -1;
+        }
+        return shadowProcTable[getpid()].msg_size;
+    }
+
+    return -1;
+}
+
+/**************
+* Function: MboxSend
+* Parameters: int mbox_id, void msg_ptr, int msg_size
+* Return: int
+* Description: Sends a msg_ptr through a mailbox. If there are no consumers queued and no space available to queue a
+*              msg_ptr, then this process will block until the msg_ptr can be delivered, either to a consumer, or into a
+*              mail slot, otherwise it will be directly delivered to to a consumer or queued in a mail slot. This function
+*              returns 0 if successful, -1 if the parameter values are invalid, or -2 if there are no available mailbox
+*              slots meaning the msg_ptr cannot be queued.
+***************/
+int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
+    return send(mbox_id, msg_ptr, msg_size, 0);
+}
+
+/**************
+* Function: MboxCondSend
+* Parameters: int mbox_id, void msg_ptr, int msg_size
+* Returns: int
+* Description: Works like MboxSend, but refuses to block. Instead of blocking it will return -2. This will be taken care
+*              of in our helper function send which can identify that it is conditional based on the flag we send it.
+***************/
+int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size) {
+    return send(mbox_id, msg_ptr, msg_size, 1);
+}
+
+/**************
+* Function: MboxRecv
+* Parameters: int mbox_id, void msg_ptr, int msg_max_size
+* Returns: int
+* Description: Waits to receive a msg_ptr through a mailbox. If there is a msg_ptr queued, then it will read directly and
+*              return. Otherwise it will block until there is a msg_ptr available. It returns -1 if there is an invalid
+*              parameter value, or if the mailbox was released before the Recv could happen, otherwise it will return the
+*              size of the msg_ptr received.
+***************/
+int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
+    return recv(mbox_id, msg_ptr, msg_max_size, 0);
+}
+
+/**************
+* Function: MboxCondRecv
+* Parameters: int mbox_id, void msg_ptr, int msg_size
+* Returns: int
+* Description: Works like MboxRecv, but refuses to block. Instead of blocking it will return -2. This will be taken care
+*              of in our helper function recv which can identify that it is conditional based on the flag we send it.
+***************/
+int MboxCondRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
+    return recv(mbox_id, msg_ptr, msg_max_size, 1);
+}
+
+
+void clockIntHandler(int dev, void *payload) {
+    int currTime = currentTime();  // fires in microseconds
+    int currTimeMs = currTime / 1000;  // convert to milliseconds
+    if (currTimeMs - (lastClockMsg/1000) >= 100) {
+        lastClockMsg = (currentTime());
+        // get status of the clock device
+        int deviceStatus;
+        USLOSS_DeviceInput(USLOSS_CLOCK_DEV, 0, &deviceStatus);
+
+        // send a message to the mailbox: MboxCondSend(mbox_id, *msg_ptr, msg_size);
+        MboxCondSend(clockIntBox, &deviceStatus, sizeof(int));
+    }
+    
+    // call dispatcher
+    dispatcher();
+}
+
+void diskIntHandler(int dev, void *unit) {
+    int unitNum = (int) (long)unit;
+    int *payload;
+
+    // get the status of the disk device
+    USLOSS_DeviceInput(USLOSS_DISK_DEV, unitNum, &payload);
+
+    if (unitNum == 0) {
+        // send a message to the mailbox: MboxCondSend(mbox_id, *msg_ptr, msg_size);
+        MboxCondSend(diskIntBox[0], payload, sizeof(int));
+    } else {
+        // send a message to the mailbox: MboxCondSend(mbox_id, *msg_ptr, msg_size);
+        MboxCondSend(diskIntBox[1], payload, sizeof(int));
+    }
+}
+
+void termIntHandler(int dev, void *unit) {
+    int unitNum = (int) (long)unit;
+    int *payload;
+
+    // get the status of the terminal device
+    USLOSS_DeviceInput(USLOSS_TERM_DEV, unitNum, &payload);
+
+    if (unitNum == 0) {
+        MboxCondSend(termIntBox[0], &payload, sizeof(int));
+    }
+    else if (unitNum == 1) {
+        MboxCondSend(termIntBox[1], &payload, sizeof(int));
+    }
+    else if (unitNum == 2) {
+        MboxCondSend(termIntBox[2], &payload, sizeof(int));
+    }
+    else {
+        MboxCondSend(termIntBox[3], &payload, sizeof(int));
+    }
+}
+
+
+static void syscallHandler(int dev, void *args) {
+    // cast as USLOSS_Sysargs to access fields
+    USLOSS_Sysargs* sysargs = (USLOSS_Sysargs*)args;
+
+    // get the syscall number
+    if (sysargs == NULL) {
+        USLOSS_Console("ERROR: sysargs is NULL\n");
+        USLOSS_Halt(1);
+    }
+    int syscallNum = sysargs->number;
+
+    if (syscallNum >= MAXSYSCALLS) {
+        USLOSS_Console("syscallHandler(): Invalid syscall number %d\n", syscallNum);
+        USLOSS_Halt(1);
+    }
+    
+    // call the appropriate system call function -- should call a nullSys and halt simulation for now
+    systemCallVec[syscallNum](sysargs);
+}
+
+/**************
+* Function: waitDevice
+* Parameters: int type, int unit, int status
+* Returns: void
+* Description: Waits for an interrupt to fire, on a given device (the clock, disk, or terminal devices). Unit must be a
+*              valid value (0 for clock; 0,1 for disk; 0,1,2,3 for terminal), otherwise we halt the simulation. It will
+*              Recv from the proper mailbox for this device and store the status when the msg_ptr arrives into the
+*              parameter and then return.
+***************/
+void waitDevice(int type, int unit, int *status) {
+    if (type == 0) {
+        // clock device/interrupt
+        if (unit != 0) {
+            USLOSS_Console("ERROR: Unit for clock device interrupt not valid.\n");
+            USLOSS_Halt(1);
+        }
+        // recv from the mailbox associated with the clock device
+        MboxRecv(clockIntBox, status, sizeof(int));
+        return;
+    }
+    else if (type == 2) {
+        // disk device/interrupt
+        if (unit == 0) {
+            // recv from the mailbox associated with the disk device
+            MboxRecv(diskIntBox[0], status, sizeof(int));
+        }
+        else if (unit == 1) {
+            // recv from the mailbox associated with the disk device
+            MboxRecv(diskIntBox[1], status, sizeof(int));
+        }
+        if (unit != 0 || unit != 1) {
+            USLOSS_Console("ERROR: Unit for disk device interrupt not valid.\n");
+            USLOSS_Halt(1);
+        }
+        return;
+    }
+    else if (type == 3) {
+        // terminal device/interrupt
+        if (unit == 0) {
+            
+            MboxRecv(termIntBox[0], status, sizeof(int));
+        }
+        else if (unit == 1) {
+            MboxRecv(termIntBox[1], status, sizeof(int));
+        }
+        else if (unit == 2) {
+            MboxRecv(termIntBox[2], status, sizeof(int));
+        }
+        else if (unit == 3) {
+            MboxRecv(termIntBox[3], status, sizeof(int));
+        }
+        else {
+            USLOSS_Console("ERROR: Unit for terminal device interrupt not valid.\n");
+            USLOSS_Halt(1);
+        }
+        return;
+    }
+    
+}
+
+// Do NOT NEED TO IMPLEMENT THIS FUNCTION -- https://discord.com/channels/1270442497503531080/1270443997994811497/1294822552908206140 
+//void wakeupByDevice(int type, int unit, int status) {}
+
+
+
+
+/**************
+* Function: disableInterrupts
+* Parameters: void
+* Returns: int
+* Description: Disables interrupts by setting the current interrupt bit to 0.
+***************/
+
+int disableInterrupts() {
+    // disable interrupts with bit manipulation
+    int oldPSR = USLOSS_PsrGet();
+    int newPSR = oldPSR & (~USLOSS_PSR_CURRENT_INT);
+    USLOSS_PsrSet(newPSR);
+    return oldPSR;
+}
+
+
+/**************
+* Function: enableInterrupts
+* Parameters: int oldPSR
+* Returns: void
+* Description: Enables interrupts by setting the current interrupt bit to 1.
+***************/
+
+void enableInterrupts(int oldPSR) {
+    // enable interrupts with bit manipulation
+    int newPSR = oldPSR | USLOSS_PSR_CURRENT_INT;
+    USLOSS_PsrSet(newPSR);
+}

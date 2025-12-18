@@ -1,0 +1,24 @@
+phase4_start_service_processes() called -- currently a NOP
+phase5_start_service_processes() called -- currently a NOP
+start3(): started
+start3(): calling Spawn for Child1a
+Child1a(): starting
+Child1a(): current time = 52   Should be close, but does not have to be an exact match
+Child1a(): current time = 61   Should be close, but does not have to be an exact match
+Child1a(): current time = 67   Should be close, but does not have to be an exact match
+Child1a(): done
+start3(): calling Spawn for Child1b
+Child1b(): starting
+Child1b(): current time = 103   Should be close, but does not have to be an exact match
+Child1b(): current time = 109   Should be close, but does not have to be an exact match
+Child1b(): current time = 114   Should be close, but does not have to be an exact match
+Child1b(): done
+start3(): calling Spawn for Child1c
+Child1c(): starting
+Child1c(): current time = 147   Should be close, but does not have to be an exact match
+Child1c(): current time = 154   Should be close, but does not have to be an exact match
+Child1c(): current time = 163   Should be close, but does not have to be an exact match
+Child1c(): done
+start3(): calling Wait for all 3 children
+start3(): Parent done. Calling Terminate.
+finish(): The simulation is now terminating.

@@ -1,0 +1,26 @@
+Phase 1A TEMPORARY HACK: init() manually switching to PID 1.
+phase2_start_service_processes() called -- currently a NOP
+phase3_start_service_processes() called -- currently a NOP
+phase4_start_service_processes() called -- currently a NOP
+phase5_start_service_processes() called -- currently a NOP
+Phase 1A TEMPORARY HACK: init() manually switching to testcase_main() after using spork() to create it.
+testcase_main(): started
+QUICK SUMMARY: Checking to see what happens when you call join() with no children at all.
+Phase 1A TEMPORARY HACK: Manually switching to the recently created XXp1()
+XXp1(): started
+XXp1(): arg = 'XXp1'
+XXp1(): performing join with no children
+XXp1(): value returned by join is -2 expected value was -2
+testcase_main(): after spork of child 3
+Phase 1A TEMPORARY HACK: Manually switching to the recently created XXp1()
+XXp2(): started
+XXp2(): arg = 'XXp2'
+testcase_main(): after spork of child 4
+testcase_main(): performing first join
+testcase_main(): exit status for child 4 is 2
+testcase_main(): performing second join
+testcase_main(): exit status for child 3 is 1
+testcase_main(): performing third join, have no unjoined children
+testcase_main(): value returned by join is -2 expected value was -2
+Phase 1A TEMPORARY HACK: testcase_main() returned, simulation will now halt.
+finish(): The simulation is now terminating.

@@ -1,0 +1,19 @@
+Phase 1A TEMPORARY HACK: init() manually switching to PID 1.
+phase2_start_service_processes() called -- currently a NOP
+phase3_start_service_processes() called -- currently a NOP
+phase4_start_service_processes() called -- currently a NOP
+phase5_start_service_processes() called -- currently a NOP
+Phase 1A TEMPORARY HACK: init() manually switching to testcase_main() after using spork() to create it.
+testcase_main(): started
+EXPECTATION: testcase_main() creates a child XXp2().  That process will try (many times) to create a child XXp1() with a too-small stack space.  Each call should fail.
+spork creating a child -- it will run next
+Phase 1A TEMPORARY HACK: Manually switching to XXp2()
+-2 returned, which is correct!
+-2 returned, which is correct!
+-2 returned, which is correct!
+-2 returned, which is correct!
+testcase_main(): created XXp2 with pid = 3
+testcase_main(): calling join
+testcase_main(): join returned pid = 3, status = 0
+Phase 1A TEMPORARY HACK: testcase_main() returned, simulation will now halt.
+finish(): The simulation is now terminating.

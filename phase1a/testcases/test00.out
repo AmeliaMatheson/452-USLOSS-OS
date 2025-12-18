@@ -1,0 +1,16 @@
+Phase 1A TEMPORARY HACK: init() manually switching to PID 1.
+phase2_start_service_processes() called -- currently a NOP
+phase3_start_service_processes() called -- currently a NOP
+phase4_start_service_processes() called -- currently a NOP
+phase5_start_service_processes() called -- currently a NOP
+Phase 1A TEMPORARY HACK: init() manually switching to testcase_main() after using spork() to create it.
+testcase_main(): started
+EXPECTATION: Simple spork()/join() should complete.
+Phase 1A TEMPORARY HACK: Manually switching to the recently created XXp1()
+XXp1(): started
+XXp1(): arg = 'XXp1'
+testcase_main(): after spork of child 3
+testcase_main(): performing join
+testcase_main(): exit status for child 3 is 3
+Phase 1A TEMPORARY HACK: testcase_main() returned, simulation will now halt.
+finish(): The simulation is now terminating.

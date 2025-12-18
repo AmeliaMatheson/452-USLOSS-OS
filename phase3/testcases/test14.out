@@ -1,0 +1,7 @@
+phase4_start_service_processes() called -- currently a NOP
+phase5_start_service_processes() called -- currently a NOP
+start3(): started
+start3(): Spawn 4
+Child1(): just started, and will end immediately.
+start3(): Done.
+finish(): The simulation is now terminating.

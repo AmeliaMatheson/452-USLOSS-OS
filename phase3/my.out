@@ -1,0 +1,15 @@
+phase4_start_service_processes() called -- currently a NOP
+phase5_start_service_processes() called -- currently a NOP
+start3(): started.  Creating semaphore.
+start3(): calling Spawn for Child1
+IN KERNEL SPAWN
+IN SPAWN HELPER
+Child1(): starting, P'ing semaphore
+start3(): after spawn of 4
+start3(): calling Spawn for Child2
+IN KERNEL SPAWN
+IN SPAWN HELPER
+Child2(): starting, V'ing semaphore
+Child2(): done
+IN KERNEL TERMINATE
+start3(): after spawn of 5

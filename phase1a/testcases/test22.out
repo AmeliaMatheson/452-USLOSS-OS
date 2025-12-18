@@ -1,0 +1,12 @@
+Phase 1A TEMPORARY HACK: init() manually switching to PID 1.
+phase2_start_service_processes() called -- currently a NOP
+phase3_start_service_processes() called -- currently a NOP
+phase4_start_service_processes() called -- currently a NOP
+phase5_start_service_processes() called -- currently a NOP
+Phase 1A TEMPORARY HACK: init() manually switching to testcase_main() after using spork() to create it.
+testcase_main(): started
+QUICK SUMMARY: Attempt to spork() with invalid priorities.
+testcase_main(): could not spork a child--invalid priority
+testcase_main(): could not spork a child--invalid priority
+Phase 1A TEMPORARY HACK: testcase_main() returned, simulation will now halt.
+finish(): The simulation is now terminating.

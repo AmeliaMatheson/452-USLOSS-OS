@@ -1,0 +1,51 @@
+Phase 1A TEMPORARY HACK: init() manually switching to PID 1.
+running process: init
+phase2_start_service_processes() called -- currently a NOP
+phase3_start_service_processes() called -- currently a NOP
+phase4_start_service_processes() called -- currently a NOP
+phase5_start_service_processes() called -- currently a NOP
+----IN SPORK----
+running process: testcase_main
+testcase_main(): started
+EXPECTATION: testcase_main() will create 3 children, all running XXp1().  They have priority 5, so that they will not interrupt testcase_main().  The PID of each child is stored into a global array.  Then testcase_main() blocks in join() (three times).  The child processes should run in the same order they were created (we use a FIFO for ordering dispatch), and so each can call getpid() to confirm that it has the same value as stored in the global array.
+----IN SPORK----
+----IN SPORK----
+----IN SPORK----
+testcase_main(): pidlist[] = [3,4,5, ...]
+Phase 1A TEMPORARY HACK: Manually switching to the first XXp1()
+running process: XXp1
+One of the XXp1() process has started, getpid()=3
+This process's getpid() matched what spork() returned.
+This XXp1() process will now terminate.
+----IN QUIT----
+	This is XXp1 quitting
+	running process: 3; status = 2
+Phase 1A TEMPORARY HACK: Manually switching to the second XXp1()
+running process: XXp1
+One of the XXp1() process has started, getpid()=4
+This process's getpid() matched what spork() returned.
+This XXp1() process will now terminate.
+----IN QUIT----
+	This is XXp1 quitting
+	running process: 4; status = 2
+Phase 1A TEMPORARY HACK: Manually switching to the second XXp1()
+running process: XXp1
+One of the XXp1() process has started, getpid()=5
+This process's getpid() matched what spork() returned.
+This XXp1() process will now terminate.
+----IN QUIT----
+	This is XXp1 quitting
+	running process: 5; status = 2
+	I have no previous sibling
+----IN JOIN----
+	dead child removed from PCB; slot priority: 0
+testcase_main: joined with child 5
+----IN JOIN----
+	dead child removed from PCB; slot priority: 0
+testcase_main: joined with child 4
+----IN JOIN----
+	dead child removed from PCB; slot priority: 0
+testcase_main: joined with child 3
+Startfunc's retval: 0
+Phase 1A TEMPORARY HACK: testcase_main() returned, simulation will now halt.
+finish(): The simulation is now terminating.
